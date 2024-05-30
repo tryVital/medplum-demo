@@ -129,7 +129,7 @@ async function saveResults(medplum: MedplumClient, event: BotEvent, orderID: str
 
   const isProd = event.secrets['VITAL_IS_PROD']?.valueBoolean;
 
-  if (!isProd) {
+  if (isProd) {
     const binary = await updatePDFResult(medplum, event.secrets, orderID);
 
     // Create a Media, representing an attachment
