@@ -30,8 +30,6 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
   switch (resource.resourceType) {
     case 'ServiceRequest': {
       const bundle = await buildVitalOrder(medplum, resource);
-      // console.log(JSON.stringify(bundle, null, 2));
-      // return JSON.stringify(bundle, null, 2);
       const orderID = await createVitalOrder(event.secrets, JSON.stringify(bundle));
 
       await medplum.updateResource<ServiceRequest>({
@@ -39,7 +37,7 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
         identifier: [
           ...(resource.identifier || []),
           {
-            system: 'vidal-order-id',
+            system: 'vital-order-id',
             use: 'secondary',
             value: orderID,
           },

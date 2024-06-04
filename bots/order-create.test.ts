@@ -20,8 +20,10 @@ import {
 } from '@medplum/fhirtypes';
 import { MockClient } from '@medplum/mock';
 import { QuestionnaireItemType } from '@medplum/react';
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { buildVitalOrder } from './order-create';
+import { MockedFunction, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { buildVitalOrder, handler } from './order-create';
+
+global.fetch = vi.fn();
 
 describe('Get ServiceRequest from subscription', () => {
   beforeAll(() => {
@@ -44,6 +46,8 @@ describe('Get ServiceRequest from subscription', () => {
   };
 
   beforeEach<Context>(async (ctx) => {
+    (global.fetch as MockedFunction<typeof fetch>).mockReset()
+
     const medplum = new MockClient();
 
     const patient = await medplum.createResource({
@@ -224,7 +228,7 @@ describe('Get ServiceRequest from subscription', () => {
       | BundleEntry<Patient>
       | undefined;
     expect(patient?.resource?.name).toEqual(ctx.patient.name);
-    expect(patient?.resource?.address?.[0].country).toEqual("US");
+    expect(patient?.resource?.address?.[0].country).toEqual('US');
 
     // Questionnaire
     const questionnaireResponse = bundle.entry?.find(
@@ -233,22 +237,64 @@ describe('Get ServiceRequest from subscription', () => {
     expect(questionnaireResponse?.resource?.status).toBe('completed');
 
     // Practitioner
-    const practitioner = bundle.entry?.find(
-      (e: any) => e.resource.resourceType === 'Practitioner'
-    ) as BundleEntry<Practitioner> | undefined;
+    const practitioner = bundle.entry?.find((e: any) => e.resource.resourceType === 'Practitioner') as
+      | BundleEntry<Practitioner>
+      | undefined;
     expect(practitioner?.resource).toEqual(ctx.requestingPhysician);
 
     // ServiceRequest
-    const serviceRequest = bundle.entry?.find(
-      (e: any) => e.resource.resourceType === 'ServiceRequest'
-    ) as BundleEntry<ServiceRequest> | undefined;
+    const serviceRequest = bundle.entry?.find((e: any) => e.resource.resourceType === 'ServiceRequest') as
+      | BundleEntry<ServiceRequest>
+      | undefined;
     expect(serviceRequest?.resource).toEqual(ctx.order);
 
     // Coverage
-    const coverage = bundle.entry?.find(
-      (e: any) => e.resource.resourceType === 'Coverage'
-    ) as BundleEntry<Coverage> | undefined;
+    const coverage = bundle.entry?.find((e: any) => e.resource.resourceType === 'Coverage') as
+      | BundleEntry<Coverage>
+      | undefined;
     expect(coverage?.resource).toEqual(ctx.coverage);
+  });
+
+  test<Context>('createOrder', async (ctx) => {
+    const orderID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+
+    (fetch as any).mockResolvedValue(createFetchResponse({ order: { id: orderID } }));
+
+    const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const baseURL = 'https://api.dev.tryvital.io';
+
+    await handler(ctx.medplum, {
+      bot: { reference: 'Bot/123' },
+      input: ctx.order,
+      contentType: 'application/fhir+json',
+      secrets: {
+        VITAL_BASE_URL: {
+          name: 'VITAL_BASE_URL',
+          valueString: baseURL,
+        },
+        VITAL_API_KEY: {
+          name: 'VITAL_API_KEY',
+          valueString: apiKey,
+        },
+      },
+    });
+
+    const expectedBody = await buildVitalOrder(ctx.medplum, ctx.order);
+
+    // Check that the order was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v3/order/fhir`, {
+      method: 'POST',
+      body: JSON.stringify(expectedBody),
+      headers: {
+        'Content-Type': 'application/fhir+json',
+        'x-vital-api-key': apiKey,
+      },
+    });
+
+    // Check that the order ID was saved as an identifier
+    const order = await ctx.medplum.readResource(ctx.order.resourceType, ctx.order.id!);
+    const vitalIdentifier = order?.identifier?.find((i) => i.system === 'vital-order-id');
+    expect(vitalIdentifier?.value).toEqual(orderID);
   });
 });
 
@@ -402,4 +448,8 @@ function buildQuestionnaireResponse(questionnaire: Questionnaire): Questionnaire
       },
     ],
   };
+}
+
+function createFetchResponse(data) {
+  return { json: () => new Promise((resolve) => resolve(data)) };
 }
