@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "prettier": {
     "printWidth": 120,
@@ -40,8 +42,11 @@
     "vite": "5.2.11"
   },
   "dependencies": {
+    "@medplum/definitions": "^3.1.7",
+    "@medplum/mock": "^3.1.7",
     "@tanstack/react-query": "^5.37.1",
     "axios": "^1.7.2",
-    "uuidjs": "^5.1.0"
+    "uuidjs": "^5.1.0",
+    "vitest": "^1.6.0"
   }
 }
