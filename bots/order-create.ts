@@ -158,14 +158,15 @@ export async function createVitalOrder(
     body: JSON.stringify(body),
   });
 
-  // Not a 2xx response
-  if (resp.status - 200 >= 100) {
-    throw new Error('Vital API error: ' + (await resp.text()));
+  switch (resp.status) {
+    case 200: {
+      const { order } = (await resp.json()) as { order: { id: string } };
+
+      return order.id;
+    }
+    default:
+      throw new Error('Vital API error: ' + (await resp.json()));
   }
-
-  const { order } = (await resp.json()) as { order: { id: string } };
-
-  return order.id;
 }
 
 /**
@@ -201,7 +202,7 @@ export async function createVitalUser(secrets: Record<string, ProjectSetting>, p
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/fhir+json',
+      'Content-Type': 'application/json',
       'x-vital-api-key': apiKey,
     },
     body: JSON.stringify(body),
@@ -219,7 +220,7 @@ export async function createVitalUser(secrets: Record<string, ProjectSetting>, p
       throw new Error('Vital API create user error: ' + JSON.stringify(user));
     }
     default:
-      throw new Error('Vital API error: ' + (await resp.text()));
+      throw new Error('Vital API error: ' + (await resp.json()));
   }
 }
 

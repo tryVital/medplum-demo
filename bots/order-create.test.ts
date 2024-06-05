@@ -184,7 +184,7 @@ describe('Get ServiceRequest from subscription', () => {
       method: 'POST',
       body: JSON.stringify({client_user_id: ctx.patient.id}),
       headers: {
-        'Content-Type': 'application/fhir+json',
+        'Content-Type': 'application/json',
         'x-vital-api-key': apiKey
       },
     });
@@ -217,7 +217,7 @@ describe('Get ServiceRequest from subscription', () => {
       method: 'POST',
       body: JSON.stringify({client_user_id: ctx.patient.id}),
       headers: {
-        'Content-Type': 'application/fhir+json',
+        'Content-Type': 'application/json',
         'x-vital-api-key': apiKey
       },
     });
@@ -256,7 +256,7 @@ describe('Get ServiceRequest from subscription', () => {
       method: 'POST',
       body: JSON.stringify({client_user_id: ctx.patient.id}),
       headers: {
-        'Content-Type': 'application/fhir+json',
+        'Content-Type': 'application/json',
         'x-vital-api-key': apiKey,
       },
     });
