@@ -9,6 +9,7 @@ import {
   Patient,
   Practitioner,
   ProjectSetting,
+  Organization,
 } from '@medplum/fhirtypes';
 
 /**
@@ -62,7 +63,7 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
 export async function buildVitalOrder(
   medplum: MedplumClient,
   sr: ServiceRequest
-): Promise<Bundle<QuestionnaireResponse | Practitioner | ServiceRequest | Coverage | Patient>> {
+): Promise<Bundle<QuestionnaireResponse | Organization | Practitioner | ServiceRequest | Coverage | Patient>> {
   if (!sr.subject || !sr.requester) {
     throw new Error('ServiceRequest is missing subject or requester');
   }
@@ -76,18 +77,20 @@ export async function buildVitalOrder(
 
   const coverage = await getCoverage(medplum, sr);
   const questionnaries = await getQuestionnaires(medplum, sr.supportingInfo || []);
+  const performer = await getPerformer(medplum, sr);
 
   return {
     resourceType: 'Bundle',
     type: 'transaction',
     entry: [
-      ...questionnaries.map((qs) => ({ resource: qs })),
-      { resource: practitioner },
-      { resource: sr },
-      { resource: coverage },
+      ...questionnaries.map((qs) => ({ resource: resourceWithoutMeta(qs) })),
+      { resource: resourceWithoutMeta(practitioner) },
+      { resource: resourceWithoutMeta(sr) },
+      { resource: resourceWithoutMeta(coverage) },
+      { resource: resourceWithoutMeta(performer) },
       {
         resource: {
-          ...patient,
+          ...resourceWithoutMeta(patient),
           address: patient.address?.map((address) => ({
             ...address,
             country: address.country || 'US',
@@ -96,6 +99,20 @@ export async function buildVitalOrder(
       },
     ],
   };
+}
+
+/**
+ * Returns a copy of the provided resource with the meta field removed.
+ *
+ * @param resource - The resource to remove the meta field from.
+ * @returns A copy of the resource without the meta field.
+ *
+ * @throws An error if the provided resource is undefined.
+ */
+export function resourceWithoutMeta<T extends Resource>(resource: T): Omit<T, 'meta'> {
+  const { meta, ...r } = resource;
+
+  return r;
 }
 
 /**
@@ -180,6 +197,37 @@ async function getCoverage(medplum: MedplumClient, sr: ServiceRequest): Promise<
   }
 
   return medplum.readReference(ref as Reference<Coverage>);
+}
+
+/**
+ * Finds the Organization resource associated with the provided ServiceRequest.
+ *
+ * @param medplum - An instance of the Medplum client for interacting with the FHIR server.
+ * @param sr - The ServiceRequest resource to search for performer references.
+ * @returns A Promise that resolves to the Organization resource found in the performer references,
+ *
+ * @throws An error if no Organization is found.
+ */
+async function getPerformer(medplum: MedplumClient, sr: ServiceRequest): Promise<Organization> {
+  if (!sr.performer || sr.performer.length === 0) {
+    throw new Error('Performer is missing');
+  }
+
+  for (const ref of sr.performer) {
+    if (ref.type === 'Organization' || ref.reference?.startsWith('Organization')) {
+      const org = await medplum.readReference(ref as Reference<Organization>);
+
+      const isLabTest = org.identifier?.find(
+        (i) => i.system === 'https://docs.tryvital.io/api-reference/lab-testing/tests'
+      );
+
+      if (isLabTest) {
+        return org;
+      }
+    }
+  }
+
+  throw new Error('Performer is missing');
 }
 
 /**

@@ -21,7 +21,8 @@ import {
 import { MockClient } from '@medplum/mock';
 import { QuestionnaireItemType } from '@medplum/react';
 import { MockedFunction, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { buildVitalOrder, handler } from './order-create';
+import { buildVitalOrder, handler, resourceWithoutMeta } from './order-create';
+import { focusManager } from '@tanstack/react-query';
 
 global.fetch = vi.fn();
 
@@ -46,158 +47,19 @@ describe('Get ServiceRequest from subscription', () => {
   };
 
   beforeEach<Context>(async (ctx) => {
-    (global.fetch as MockedFunction<typeof fetch>).mockReset()
+    (global.fetch as MockedFunction<typeof fetch>).mockReset();
 
     const medplum = new MockClient();
 
-    const patient = await medplum.createResource({
-      resourceType: 'Patient',
-      use: 'official',
-      name: [
-        {
-          given: ['Zinedine'],
-          family: 'Zidane',
-        },
-      ],
-      birthDate: '1993-01-01',
-      address: [
-        {
-          line: ['West Lincoln Street'],
-          city: 'Phoenix',
-          state: 'AZ',
-          postalCode: '85004',
-        },
-      ],
-      telecom: [
-        {
-          system: 'phone',
-          value: '+17411709894',
-        },
-        {
-          system: 'email',
-          value: 'test@test.com',
-        },
-      ],
-      gender: 'male',
-    });
-
-    const requestingPhysician = await medplum.createResource({
-      resourceType: 'Practitioner',
-      identifier: [
-        {
-          system: 'http://hl7.org/fhir/sid/us-npi',
-          value: '1234567890',
-        },
-      ],
-      name: [
-        {
-          prefix: ['Dr.'],
-          given: ['Pierre'],
-          family: 'Gasly',
-        },
-      ],
-      telecom: [
-        {
-          system: 'phone',
-          value: '+17411709894',
-        },
-        {
-          system: 'email',
-          value: 'test@test.com',
-        },
-      ],
-      address: [
-        {
-          use: 'work',
-          state: 'NY',
-        },
-        {
-          use: 'work',
-          state: 'CA',
-        },
-      ],
-      gender: 'male',
-    });
-
-    const performer = await medplum.createResource({
-      resourceType: 'Organization',
-      identifier: [
-        {
-          system: 'https://docs.tryvital.io/api-reference/lab-testing/tests',
-          value: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-        },
-      ],
-      type: [
-        {
-          coding: [
-            {
-              system: 'http://terminology.hl7.org/CodeSystem/organization-type',
-              code: 'prov',
-            },
-          ],
-        },
-      ],
-      name: 'Acme Clinical Labs',
-    });
-
+    const patient = await medplum.createResource(buildPatient());
+    const requestingPhysician = await medplum.createResource(buildRequestingPhysician());
+    const performer = await medplum.createResource(buildPerformer());
     const questionnarie = await medplum.createResource(buildQuestionnaire());
     const questionnarieResponse = await medplum.createResource(buildQuestionnaireResponse(questionnarie));
-
-    const coverage = await medplum.createResource({
-      resourceType: 'Coverage',
-      network: 'Medicare',
-      subscriber: createReference(patient),
-      subscriberId: '1234567890',
-      status: 'active',
-      beneficiary: createReference(patient),
-      payor: [createReference(performer)],
-      relationship: {
-        coding: [
-          {
-            system: 'http://terminology.hl7.org/CodeSystem/subscriber-relationship',
-            code: 'self',
-          },
-        ],
-      },
-    });
-
-    const order = await medplum.createResource({
-      resourceType: 'ServiceRequest',
-      subject: createReference(patient),
-      requester: createReference(requestingPhysician),
-      performer: [createReference(performer)],
-      insurance: [createReference(coverage)],
-      status: 'active',
-      intent: 'order',
-      code: {
-        // Diagnosis codes (ICD-10)
-        coding: [
-          {
-            system: 'http://hl7.org/fhir/sid/icd-10-cm',
-            code: 'I10.9',
-          },
-          {
-            system: 'http://hl7.org/fhir/sid/icd-10-cm',
-            code: 'R50.9',
-          },
-        ],
-      },
-      supportingInfo: [createReference(questionnarieResponse)],
-      note: [
-        // Subjective/symptoms
-        {
-          text: 'The patient reports experiencing headaches for the past week. The headaches are described as throbbing and are worse in the morning. The patient has also been experiencing nausea and vomiting.',
-        },
-      ],
-      // NOTE: This won't be in the out-of-the-box Medplum UI
-      extension: [
-        {
-          url: 'assessment_plan',
-          valueString:
-            'Based on the symptoms, a CT scan of the head is recommended to rule out any underlying neurological causes.',
-        },
-      ],
-    } as ServiceRequest);
+    const coverage = await medplum.createResource(buildCoverage(patient, performer));
+    const order = await medplum.createResource(
+      buildServiceRequest(patient, requestingPhysician, performer, coverage, questionnarieResponse)
+    );
 
     Object.assign(ctx, {
       medplum,
@@ -221,7 +83,7 @@ describe('Get ServiceRequest from subscription', () => {
 
     expect(bundle.resourceType).toBe('Bundle');
     expect(bundle.type).toBe('transaction');
-    expect(bundle.entry?.length).toBe(5);
+    expect(bundle.entry?.length).toBe(6);
 
     // Patient
     const patient = bundle.entry?.find((e: any) => e.resource.resourceType === 'Patient') as
@@ -240,19 +102,26 @@ describe('Get ServiceRequest from subscription', () => {
     const practitioner = bundle.entry?.find((e: any) => e.resource.resourceType === 'Practitioner') as
       | BundleEntry<Practitioner>
       | undefined;
-    expect(practitioner?.resource).toEqual(ctx.requestingPhysician);
+    expect(practitioner?.resource).toEqual(resourceWithoutMeta(ctx.requestingPhysician));
+
+    const performer = bundle.entry?.find((e: any) => e.resource.resourceType === 'Organization') as
+      | BundleEntry<Organization>
+      | undefined;
+    expect(performer?.resource).toEqual(resourceWithoutMeta(ctx.performer));
 
     // ServiceRequest
     const serviceRequest = bundle.entry?.find((e: any) => e.resource.resourceType === 'ServiceRequest') as
       | BundleEntry<ServiceRequest>
       | undefined;
-    expect(serviceRequest?.resource).toEqual(ctx.order);
+    expect(serviceRequest?.resource).toEqual(resourceWithoutMeta(ctx.order));
 
     // Coverage
     const coverage = bundle.entry?.find((e: any) => e.resource.resourceType === 'Coverage') as
       | BundleEntry<Coverage>
       | undefined;
-    expect(coverage?.resource).toEqual(ctx.coverage);
+    expect(coverage?.resource).toEqual(resourceWithoutMeta(ctx.coverage));
+
+    console.log(JSON.stringify(bundle));
   });
 
   test<Context>('createOrder', async (ctx) => {
@@ -450,6 +319,167 @@ function buildQuestionnaireResponse(questionnaire: Questionnaire): Questionnaire
   };
 }
 
-function createFetchResponse(data) {
+function createFetchResponse(data: any) {
   return { json: () => new Promise((resolve) => resolve(data)) };
+}
+
+function buildPerformer(): Organization {
+  return {
+    resourceType: 'Organization',
+    identifier: [
+      {
+        system: 'https://docs.tryvital.io/api-reference/lab-testing/tests',
+        value: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      },
+    ],
+    type: [
+      {
+        coding: [
+          {
+            system: 'http://terminology.hl7.org/CodeSystem/organization-type',
+            code: 'prov',
+          },
+        ],
+      },
+    ],
+    name: 'Acme Clinical Labs',
+  };
+}
+
+function buildRequestingPhysician(): Practitioner {
+  return {
+    resourceType: 'Practitioner',
+    identifier: [
+      {
+        system: 'http://hl7.org/fhir/sid/us-npi',
+        value: '1234567890',
+      },
+    ],
+    name: [
+      {
+        prefix: ['Dr.'],
+        given: ['Pierre'],
+        family: 'Gasly',
+      },
+    ],
+    telecom: [
+      {
+        system: 'phone',
+        value: '+17411709894',
+      },
+      {
+        system: 'email',
+        value: 'test@test.com',
+      },
+    ],
+    address: [
+      {
+        use: 'work',
+        state: 'NY',
+      },
+      {
+        use: 'work',
+        state: 'CA',
+      },
+    ],
+    gender: 'male',
+  };
+}
+
+function buildPatient(): Patient {
+  return {
+    resourceType: 'Patient',
+    name: [
+      {
+        given: ['Zinedine'],
+        family: 'Zidane',
+      },
+    ],
+    birthDate: '1993-01-01',
+    address: [
+      {
+        line: ['West Lincoln Street'],
+        city: 'Phoenix',
+        state: 'AZ',
+        postalCode: '85004',
+      },
+    ],
+    telecom: [
+      {
+        system: 'phone',
+        value: '+17411709894',
+      },
+      {
+        system: 'email',
+        value: 'test@test.com',
+      },
+    ],
+    gender: 'male',
+  };
+}
+
+function buildCoverage(patient: Patient, performer: Organization): Coverage {
+  return {
+    resourceType: 'Coverage',
+    network: 'Medicare',
+    subscriber: createReference(patient),
+    subscriberId: '1234567890',
+    status: 'active',
+    beneficiary: createReference(patient),
+    payor: [createReference(performer)],
+    relationship: {
+      coding: [
+        {
+          system: 'http://terminology.hl7.org/CodeSystem/subscriber-relationship',
+          code: 'self',
+        },
+      ],
+    },
+  };
+}
+
+function buildServiceRequest(
+  patient: Patient,
+  requestingPhysician: Practitioner,
+  performer: Organization,
+  coverage: Coverage,
+  questionnarieResponse: QuestionnaireResponse
+): ServiceRequest {
+  return {
+    resourceType: 'ServiceRequest',
+    subject: createReference(patient),
+    requester: createReference(requestingPhysician),
+    performer: [createReference(performer)],
+    insurance: [createReference(coverage)],
+    status: 'active',
+    intent: 'order',
+    code: {
+      // Diagnosis codes (ICD-10)
+      coding: [
+        {
+          system: 'http://hl7.org/fhir/sid/icd-10-cm',
+          code: 'I10.9',
+        },
+        {
+          system: 'http://hl7.org/fhir/sid/icd-10-cm',
+          code: 'R50.9',
+        },
+      ],
+    },
+    supportingInfo: [createReference(questionnarieResponse)],
+    note: [
+      // Subjective/symptoms
+      {
+        text: 'The patient reports experiencing headaches for the past week. The headaches are described as throbbing and are worse in the morning. The patient has also been experiencing nausea and vomiting.',
+      },
+    ],
+    // NOTE: This won't be in the out-of-the-box Medplum UI
+    extension: [
+      {
+        url: 'assessment_plan',
+        valueString:
+          'Based on the symptoms, a CT scan of the head is recommended to rule out any underlying neurological causes.',
+      },
+    ],
+  };
 }
