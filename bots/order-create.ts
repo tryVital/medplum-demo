@@ -31,7 +31,16 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
   switch (resource.resourceType) {
     case 'ServiceRequest': {
       const bundle = await buildVitalOrder(medplum, resource);
-      const orderID = await createVitalOrder(event.secrets, JSON.stringify(bundle));
+      const patient = bundle.entry?.find((e) => e.resource?.resourceType === 'Patient')?.resource as
+        | Patient
+        | undefined;
+
+      if (!patient) {
+        throw new Error('Patient is missing');
+      }
+
+      await createVitalUser(event.secrets, patient);
+      const orderID = await createVitalOrder(event.secrets, bundle);
 
       await medplum.updateResource<ServiceRequest>({
         ...resource,
@@ -53,6 +62,14 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
 }
 
 /**
+ * Bundle containing patient, practitioner, service request, coverage, and questionnaire response resources
+ * for creating a Vital order.
+ */
+type CreateOrderBundle = Bundle<
+  QuestionnaireResponse | Organization | Practitioner | ServiceRequest | Coverage | Patient
+>;
+
+/**
  * Builds a Bundle containing patient, practitioner, service request, coverage, and questionnaire response resources
  * from the provided ServiceRequest.
  *
@@ -60,10 +77,7 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
  * @param sr - The ServiceRequest resource to use for building the Bundle.
  * @returns A Promise that resolves to the constructed Bundle.
  */
-export async function buildVitalOrder(
-  medplum: MedplumClient,
-  sr: ServiceRequest
-): Promise<Bundle<QuestionnaireResponse | Organization | Practitioner | ServiceRequest | Coverage | Patient>> {
+export async function buildVitalOrder(medplum: MedplumClient, sr: ServiceRequest): Promise<CreateOrderBundle> {
   if (!sr.subject || !sr.requester) {
     throw new Error('ServiceRequest is missing subject or requester');
   }
@@ -119,11 +133,13 @@ export function resourceWithoutMeta<T extends Resource>(resource: T): Omit<T, 'm
  * Sends a POST request to the Vital API to create a vital order using the provided Bundle.
  *
  * @param secrets - An object containing project settings, including `VITAL_API_KEY` and `VITAL_BASE_URL`.
- * @param body - The stringified JSON representation of the object to send to the Vital API.
- * @param isFhir - A boolean indicating whether the body is in FHIR format.
+ * @param body - The Bundle containing the resources to create the order with.
  * @returns A Promise that resolves to the ID of the created order.
  */
-async function createVitalOrder(secrets: Record<string, ProjectSetting>, body: string, isFhir = true): Promise<string> {
+export async function createVitalOrder(
+  secrets: Record<string, ProjectSetting>,
+  body: CreateOrderBundle
+): Promise<string> {
   const apiKey = secrets['VITAL_API_KEY'].valueString;
   const baseURL = secrets['VITAL_BASE_URL']?.valueString || 'https://api.dev.tryvital.io';
 
@@ -131,15 +147,15 @@ async function createVitalOrder(secrets: Record<string, ProjectSetting>, body: s
     throw new Error('VITAL_API_KEY and VITAL_BASE_URL are required');
   }
 
-  const url = isFhir ? `${baseURL}/v3/order/fhir` : `${baseURL}/v3/order`;
+  const url = `${baseURL}/v3/order/fhir`;
 
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': isFhir ? 'application/fhir+json' : 'application/json',
+      'Content-Type': 'application/fhir+json',
       'x-vital-api-key': apiKey,
     },
-    body: body,
+    body: JSON.stringify(body),
   });
 
   // Not a 2xx response
@@ -150,6 +166,61 @@ async function createVitalOrder(secrets: Record<string, ProjectSetting>, body: s
   const { order } = (await resp.json()) as { order: { id: string } };
 
   return order.id;
+}
+
+/**
+ * Response from the Vital API when creating a user.
+ */
+type CreateUserResponse = {
+  client_user_id: string;
+  user_id: string;
+};
+
+/**
+ * Sends a POST request to the Vital API to create a vital user using the provided Patient.
+ *
+ * @param secrets - An object containing project settings, including `VITAL_API_KEY` and `VITAL_BASE_URL`.
+ * @param patient - The Patient resource to create the vital user with.
+ *
+ * @returns A Promise that resolves to the ID of the created vital user.
+ */
+export async function createVitalUser(secrets: Record<string, ProjectSetting>, patient: Patient): Promise<string> {
+  const apiKey = secrets['VITAL_API_KEY'].valueString;
+  const baseURL = secrets['VITAL_BASE_URL']?.valueString || 'https://api.dev.tryvital.io';
+
+  if (!apiKey || !baseURL) {
+    throw new Error('VITAL_API_KEY and VITAL_BASE_URL are required');
+  }
+
+  const url = `${baseURL}/v2/user`;
+
+  const body = {
+    client_user_id: patient.id,
+  };
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/fhir+json',
+      'x-vital-api-key': apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  switch (resp.status) {
+    case 400:
+    case 200: {
+      const user = (await resp.json()) as CreateUserResponse;
+
+      if (user.client_user_id) {
+        return user.user_id;
+      }
+
+      throw new Error('Vital API create user error: ' + JSON.stringify(user));
+    }
+    default:
+      throw new Error('Vital API error: ' + (await resp.text()));
+  }
 }
 
 /**

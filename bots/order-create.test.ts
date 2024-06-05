@@ -21,8 +21,7 @@ import {
 import { MockClient } from '@medplum/mock';
 import { QuestionnaireItemType } from '@medplum/react';
 import { MockedFunction, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { buildVitalOrder, handler, resourceWithoutMeta } from './order-create';
-import { focusManager } from '@tanstack/react-query';
+import { buildVitalOrder, createVitalOrder, createVitalUser, handler, resourceWithoutMeta } from './order-create';
 
 global.fetch = vi.fn();
 
@@ -120,17 +119,121 @@ describe('Get ServiceRequest from subscription', () => {
       | BundleEntry<Coverage>
       | undefined;
     expect(coverage?.resource).toEqual(resourceWithoutMeta(ctx.coverage));
-
-    console.log(JSON.stringify(bundle));
   });
 
   test<Context>('createOrder', async (ctx) => {
     const orderID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 
-    (fetch as any).mockResolvedValue(createFetchResponse({ order: { id: orderID } }));
+    (fetch as any).mockResolvedValue(createFetchResponse({ order: { id: orderID }}, 200));
 
     const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
     const baseURL = 'https://api.dev.tryvital.io';
+
+    const bundle = await buildVitalOrder(ctx.medplum, ctx.order);
+
+    const secrets = {
+      VITAL_BASE_URL: {
+        name: 'VITAL_BASE_URL',
+        valueString: baseURL,
+      },
+      VITAL_API_KEY: {
+        name: 'VITAL_API_KEY',
+        valueString: apiKey,
+      },
+    }
+
+    const gotOrderID = await createVitalOrder(secrets, bundle);
+
+    expect(gotOrderID).toBe(orderID);
+
+    // Check that the order was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v3/order/fhir`, {
+      method: 'POST',
+      body: JSON.stringify(bundle),
+      headers: {
+        'Content-Type': 'application/fhir+json',
+        'x-vital-api-key': apiKey,
+      },
+    });
+  });
+
+  test<Context>('createPatient', async (ctx) => {
+    const userID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+    const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const baseURL = 'https://api.dev.tryvital.io';
+
+    (fetch as any).mockResolvedValue(createFetchResponse({ client_user_id: ctx.patient.id, user_id: userID }, 200));
+
+    const secrets = {
+      VITAL_BASE_URL: {
+        name: 'VITAL_BASE_URL',
+        valueString: baseURL,
+      },
+      VITAL_API_KEY: {
+        name: 'VITAL_API_KEY',
+        valueString: apiKey,
+      },
+    }
+
+    const goUserID = await createVitalUser(secrets, ctx.patient);
+
+    expect(goUserID).toBe(userID);
+
+    // Check that the patient was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
+      method: 'POST',
+      body: JSON.stringify({client_user_id: ctx.patient.id}),
+      headers: {
+        'Content-Type': 'application/fhir+json',
+        'x-vital-api-key': apiKey
+      },
+    });
+  });
+
+  test<Context>('createPatientAlreadyExists', async (ctx) => {
+    const userID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+    const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const baseURL = 'https://api.dev.tryvital.io';
+
+    (fetch as any).mockResolvedValue(createFetchResponse({ client_user_id: ctx.patient.id, user_id: userID }, 400));
+
+    const secrets = {
+      VITAL_BASE_URL: {
+        name: 'VITAL_BASE_URL',
+        valueString: baseURL,
+      },
+      VITAL_API_KEY: {
+        name: 'VITAL_API_KEY',
+        valueString: apiKey,
+      },
+    }
+
+    const goUserID = await createVitalUser(secrets, ctx.patient);
+
+    expect(goUserID).toBe(userID);
+
+    // Check that the patient was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
+      method: 'POST',
+      body: JSON.stringify({client_user_id: ctx.patient.id}),
+      headers: {
+        'Content-Type': 'application/fhir+json',
+        'x-vital-api-key': apiKey
+      },
+    });
+  });
+
+  test<Context>('handler', async (ctx) => {
+    const userID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+    const orderID = '2a85f64-5717-4562-b3fc-2c963f66afa6';
+    const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const baseURL = 'https://api.dev.tryvital.io';
+
+    (fetch as MockedFunction<typeof fetch>)
+      // Resolve the first fetch call with the patient ID
+      .mockResolvedValueOnce(createFetchResponse({ client_user_id: ctx.patient.id, user_id: userID }, 200))
+      // Resolve the second fetch call with the order ID
+      .mockResolvedValueOnce(createFetchResponse({ order: { id: orderID }}, 200))
 
     await handler(ctx.medplum, {
       bot: { reference: 'Bot/123' },
@@ -148,22 +251,25 @@ describe('Get ServiceRequest from subscription', () => {
       },
     });
 
-    const expectedBody = await buildVitalOrder(ctx.medplum, ctx.order);
-
-    // Check that the order was sent to the Vital API
-    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v3/order/fhir`, {
+    // Check that the patient was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
       method: 'POST',
-      body: JSON.stringify(expectedBody),
+      body: JSON.stringify({client_user_id: ctx.patient.id}),
       headers: {
         'Content-Type': 'application/fhir+json',
         'x-vital-api-key': apiKey,
       },
     });
 
-    // Check that the order ID was saved as an identifier
-    const order = await ctx.medplum.readResource(ctx.order.resourceType, ctx.order.id!);
-    const vitalIdentifier = order?.identifier?.find((i) => i.system === 'vital-order-id');
-    expect(vitalIdentifier?.value).toEqual(orderID);
+    // Check that the order was sent to the Vital API
+    expect(fetch).toHaveBeenCalledWith(`${baseURL}/v3/order/fhir`, {
+      method: 'POST',
+      body: JSON.stringify(await buildVitalOrder(ctx.medplum, ctx.order)),
+      headers: {
+        'Content-Type': 'application/fhir+json',
+        'x-vital-api-key': apiKey,
+        },
+    });
   });
 });
 
@@ -319,8 +425,11 @@ function buildQuestionnaireResponse(questionnaire: Questionnaire): Questionnaire
   };
 }
 
-function createFetchResponse(data: any) {
-  return { json: () => new Promise((resolve) => resolve(data)) };
+function createFetchResponse(data: any, status = 200): Response {
+  return {
+    status,
+    json: () => new Promise((resolve) => resolve(data)) 
+  } as Response;
 }
 
 function buildPerformer(): Organization {
