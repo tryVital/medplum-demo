@@ -32,14 +32,15 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
   const orderID = (event.input as OrderEvent).id;
 
   const bundle = await fetchFhirResults(event.secrets, orderID);
+  let media: Media | undefined = undefined;
+
+  // TODO: Check if we are in production
   const isProd = false;
 
   if (isProd) {
-    // TODO: Make it createPDFResultMedia or something like this
-    const binary = await updatePDFResult(medplum, {}, orderID);
+    const binary = await fetchPDFResult(medplum, event.secrets, orderID);
 
-    // Create a Media, representing an attachment
-    const media = await medplum.createResource({
+    media = await medplum.createResource({
       resourceType: 'Media',
       status: 'completed',
       content: {
@@ -47,11 +48,12 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
         url: 'Binary/' + binary.id,
         title: 'report.pdf',
       },
-    } as Media);
+    });
   }
 
-  // TODO: Pass media to createDiagnosticReport
-  const diagnosticReport = await createDiagnoticReport(medplum, bundle, orderID);
+  const diagnosticReport = await createDiagnoticReport(medplum, bundle, media, orderID);
+
+  return JSON.stringify(diagnosticReport);
 }
 
 /**
@@ -99,6 +101,7 @@ export async function fetchFhirResults(secrets: Record<string, ProjectSetting>, 
 export async function createDiagnoticReport(
   medplum: MedplumClient,
   bundle: Bundle,
+  media: Media | undefined,
   orderID: string
 ): Promise<DiagnosticReport> {
   const patient = bundle.entry?.find((e: any) => e.resource.resourceType === 'Patient')?.resource as
@@ -148,6 +151,14 @@ export async function createDiagnoticReport(
     effectiveDateTime: metadata.effectiveDateTime,
     issued: metadata.issued,
     conclusion: metadata.interpretation?.[0].coding?.[0].display,
+    media: media
+      ? [
+          {
+            comment: 'PDF Report',
+            link: createReference(media),
+          },
+        ]
+      : [],
     conclusionCode: [
       {
         coding: metadata.interpretation?.[0].coding,
@@ -168,7 +179,7 @@ export async function createDiagnoticReport(
  *
  * @returns A promise that resolves to the Binary resource
  */
-async function updatePDFResult(
+async function fetchPDFResult(
   medplum: MedplumClient,
   secrets: Record<string, ProjectSetting>,
   orderID: string
@@ -196,8 +207,6 @@ async function updatePDFResult(
   if (!binary.url) {
     throw new Error('Binary is missing');
   }
-
-  console.log('PDF URL:', binary.url);
 
   return binary;
 }

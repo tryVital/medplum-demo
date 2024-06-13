@@ -127,7 +127,7 @@ describe('Create Order Bot', () => {
     const patient = await ctx.medplum.createResource(ctx.patient);
 
     const orderID = '28a3b3b3-0b3b-4b3b-8b3b-2b3b3b3b3b3b';
-    const diagnosticReport = await createDiagnoticReport(ctx.medplum, buildAPIBundleResponse(patient), orderID);
+    const diagnosticReport = await createDiagnoticReport(ctx.medplum, buildAPIBundleResponse(patient), undefined, orderID);
 
     expect(diagnosticReport.conclusion).toEqual('Normal');
     expect(diagnosticReport.conclusionCode).toEqual([
