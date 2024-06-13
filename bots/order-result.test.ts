@@ -23,7 +23,7 @@ import {
 import { MockClient } from '@medplum/mock';
 import { QuestionnaireItemType } from '@medplum/react';
 import { MockedFunction, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createDiagnoticReport, fetchFhirResults } from './order-result';
+import { createDiagnoticReport, fetchFhirResults, handler } from './order-result';
 
 global.fetch = vi.fn();
 
@@ -127,7 +127,12 @@ describe('Create Order Bot', () => {
     const patient = await ctx.medplum.createResource(ctx.patient);
 
     const orderID = '28a3b3b3-0b3b-4b3b-8b3b-2b3b3b3b3b3b';
-    const diagnosticReport = await createDiagnoticReport(ctx.medplum, buildAPIBundleResponse(patient), undefined, orderID);
+    const diagnosticReport = await createDiagnoticReport(
+      ctx.medplum,
+      buildAPIBundleResponse(patient),
+      undefined,
+      orderID
+    );
 
     expect(diagnosticReport.conclusion).toEqual('Normal');
     expect(diagnosticReport.conclusionCode).toEqual([
