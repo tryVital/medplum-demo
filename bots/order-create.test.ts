@@ -25,7 +25,7 @@ import { buildVitalOrder, createVitalOrder, createVitalUser, handler, resourceWi
 
 global.fetch = vi.fn();
 
-describe('Get ServiceRequest from subscription', () => {
+describe('Create Order Bot', () => {
   beforeAll(() => {
     indexStructureDefinitionBundle(readJson('fhir/r4/profiles-types.json') as Bundle);
     indexStructureDefinitionBundle(readJson('fhir/r4/profiles-resources.json') as Bundle);
@@ -124,7 +124,7 @@ describe('Get ServiceRequest from subscription', () => {
   test<Context>('createOrder', async (ctx) => {
     const orderID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 
-    (fetch as any).mockResolvedValue(createFetchResponse({ order: { id: orderID }}, 200));
+    (fetch as any).mockResolvedValue(createFetchResponse({ order: { id: orderID } }, 200));
 
     const apiKey = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
     const baseURL = 'https://api.dev.tryvital.io';
@@ -140,7 +140,7 @@ describe('Get ServiceRequest from subscription', () => {
         name: 'VITAL_API_KEY',
         valueString: apiKey,
       },
-    }
+    };
 
     const gotOrderID = await createVitalOrder(secrets, bundle);
 
@@ -173,7 +173,7 @@ describe('Get ServiceRequest from subscription', () => {
         name: 'VITAL_API_KEY',
         valueString: apiKey,
       },
-    }
+    };
 
     const goUserID = await createVitalUser(secrets, ctx.patient);
 
@@ -182,10 +182,10 @@ describe('Get ServiceRequest from subscription', () => {
     // Check that the patient was sent to the Vital API
     expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
       method: 'POST',
-      body: JSON.stringify({client_user_id: ctx.patient.id}),
+      body: JSON.stringify({ client_user_id: ctx.patient.id }),
       headers: {
         'Content-Type': 'application/json',
-        'x-vital-api-key': apiKey
+        'x-vital-api-key': apiKey,
       },
     });
   });
@@ -206,7 +206,7 @@ describe('Get ServiceRequest from subscription', () => {
         name: 'VITAL_API_KEY',
         valueString: apiKey,
       },
-    }
+    };
 
     const goUserID = await createVitalUser(secrets, ctx.patient);
 
@@ -215,10 +215,10 @@ describe('Get ServiceRequest from subscription', () => {
     // Check that the patient was sent to the Vital API
     expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
       method: 'POST',
-      body: JSON.stringify({client_user_id: ctx.patient.id}),
+      body: JSON.stringify({ client_user_id: ctx.patient.id }),
       headers: {
         'Content-Type': 'application/json',
-        'x-vital-api-key': apiKey
+        'x-vital-api-key': apiKey,
       },
     });
   });
@@ -233,7 +233,7 @@ describe('Get ServiceRequest from subscription', () => {
       // Resolve the first fetch call with the patient ID
       .mockResolvedValueOnce(createFetchResponse({ client_user_id: ctx.patient.id, user_id: userID }, 200))
       // Resolve the second fetch call with the order ID
-      .mockResolvedValueOnce(createFetchResponse({ order: { id: orderID }}, 200))
+      .mockResolvedValueOnce(createFetchResponse({ order: { id: orderID } }, 200));
 
     await handler(ctx.medplum, {
       bot: { reference: 'Bot/123' },
@@ -254,7 +254,7 @@ describe('Get ServiceRequest from subscription', () => {
     // Check that the patient was sent to the Vital API
     expect(fetch).toHaveBeenCalledWith(`${baseURL}/v2/user`, {
       method: 'POST',
-      body: JSON.stringify({client_user_id: ctx.patient.id}),
+      body: JSON.stringify({ client_user_id: ctx.patient.id }),
       headers: {
         'Content-Type': 'application/json',
         'x-vital-api-key': apiKey,
@@ -268,7 +268,7 @@ describe('Get ServiceRequest from subscription', () => {
       headers: {
         'Content-Type': 'application/fhir+json',
         'x-vital-api-key': apiKey,
-        },
+      },
     });
   });
 });
@@ -428,7 +428,7 @@ function buildQuestionnaireResponse(questionnaire: Questionnaire): Questionnaire
 function createFetchResponse(data: any, status = 200): Response {
   return {
     status,
-    json: () => new Promise((resolve) => resolve(data)) 
+    json: () => new Promise((resolve) => resolve(data)),
   } as Response;
 }
 

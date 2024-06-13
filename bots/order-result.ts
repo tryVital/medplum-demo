@@ -1,7 +1,8 @@
-import { BotEvent, MedplumClient } from '@medplum/core';
+import { BotEvent, MedplumClient, createReference } from '@medplum/core';
 import {
   Binary,
   Bundle,
+  BundleEntry,
   DiagnosticReport,
   Media,
   Observation,
@@ -29,21 +30,41 @@ export async function handler(medplum: MedplumClient, event: BotEvent): Promise<
   }
 
   const orderID = (event.input as OrderEvent).id;
-  return saveResults(medplum, event, orderID);
+
+  const bundle = await fetchFhirResults(event.secrets, orderID);
+  const isProd = false;
+
+  if (isProd) {
+    // TODO: Make it createPDFResultMedia or something like this
+    const binary = await updatePDFResult(medplum, {}, orderID);
+
+    // Create a Media, representing an attachment
+    const media = await medplum.createResource({
+      resourceType: 'Media',
+      status: 'completed',
+      content: {
+        contentType: 'application/pdf',
+        url: 'Binary/' + binary.id,
+        title: 'report.pdf',
+      },
+    } as Media);
+  }
+
+  // TODO: Pass media to createDiagnosticReport
+  const diagnosticReport = await createDiagnoticReport(medplum, bundle, orderID);
 }
 
 /**
- * Fetches the results from the Vital API and saves them to the Medplum server
+ * Fetches the results from the Vital API
  *
- * @param medplum - The MedplumClient
  * @param event - The BotEvent
  * @param orderID - The order ID
  *
- * @returns A promise that resolves to true if the results were saved successfully
+ * @returns A promise that resolves to the FHIR Bundle
  */
-async function saveResults(medplum: MedplumClient, event: BotEvent, orderID: string): Promise<any> {
-  const apiKey = event.secrets['VITAL_API_KEY'].valueString;
-  const baseURL = event.secrets['VITAL_BASE_URL'].valueString || 'https://api.dev.tryvital.io';
+export async function fetchFhirResults(secrets: Record<string, ProjectSetting>, orderID: string): Promise<Bundle> {
+  const apiKey = secrets['VITAL_API_KEY'].valueString;
+  const baseURL = secrets['VITAL_BASE_URL'].valueString || 'https://api.dev.tryvital.io';
 
   if (!apiKey || !baseURL) {
     throw new Error('VITAL_API_KEY and VITAL_BASE_URL are required');
@@ -59,104 +80,83 @@ async function saveResults(medplum: MedplumClient, event: BotEvent, orderID: str
     },
   });
 
-  // Not a 2xx response
-  if (resp.status - 200 >= 100) {
-    throw new Error('Vital API error: ' + (await resp.text()));
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch results: ${resp.status} ${await resp.json()}`);
   }
 
-  const bundle = (await resp.json()) as Bundle;
+  return resp.json();
+}
 
-  const patient = bundle.entry?.[0] as Patient;
+/**
+ * Saves the results to the Medplum server
+ *
+ * @param medplum - The MedplumClient
+ * @param bundle - The FHIR Bundle
+ * @param orderID - The order ID
+ *
+ * @returns A promise that resolves to true if the results were saved successfully
+ */
+export async function createDiagnoticReport(
+  medplum: MedplumClient,
+  bundle: Bundle,
+  orderID: string
+): Promise<DiagnosticReport> {
+  const patient = bundle.entry?.find((e: any) => e.resource.resourceType === 'Patient')?.resource as
+    | Patient
+    | undefined;
 
-  const obs = bundle.entry?.filter((entry) => entry.resource?.resourceType === 'Observation');
-  if (!obs) {
-    throw new Error('No observations found');
+  if (!patient || !patient.id) {
+    throw new Error('No patient found in bundle');
   }
 
-  const observations: Reference<Observation>[] = [];
-  const metadata = obs[0].resource as Observation;
-
-  for (const entry of obs) {
-    const observation = entry.resource as Observation;
-    observation.subject = {
-      reference: `Patient/${patient.id}`,
-    };
-
-    // TODO: Make sure this mappings are corrected in the API level
-    observation.valueString = observation.valueString || undefined;
-    observation.valueQuantity = observation.valueQuantity || undefined;
-    observation.valueRange = observation.valueRange || undefined;
-    observation.code = {
-      coding: (observation.code?.coding || []).map((coding) => ({
-        system: coding.system || 'http://loinc.org',
-        code: coding.code || '',
-        display: coding.display || '',
-      })),
-    };
-
-    const { id } = await medplum.createResource(observation);
-    observations.push({
-      reference: `Observation/${id}`,
-    });
+  if (!(await medplum.readResource('Patient', patient.id))) {
+    throw new Error('Patient not found in Medplum');
   }
 
-  // TODO: Update service request with the orderID
-  const diagnosticReport = {
+  const observationEntries = bundle.entry?.filter((entry) => entry.resource?.resourceType === 'Observation') as
+    | BundleEntry<Observation>[]
+    | undefined;
+  if (!observationEntries || observationEntries.length === 0) {
+    throw new Error('No observations found in bundle');
+  }
+
+  const respBundle = await medplum.executeBatch({
+    resourceType: 'Bundle',
+    type: 'transaction',
+    entry: observationEntries.map((entry) => ({
+      resource: entry.resource,
+      request: {
+        method: 'POST',
+        url: 'Observation',
+      },
+    })),
+  });
+  const observations = respBundle.entry?.map((entry) => createReference(entry.resource as Observation)) || [];
+
+  const metadata = observationEntries[0].resource!;
+  const diagnosticReport: DiagnosticReport = {
     resourceType: 'DiagnosticReport',
     status: metadata.status,
     identifier: [
       {
-        system: `${baseURL}/v3/order/${orderID}/result/pdf`,
+        system: 'vital_order_id',
         value: orderID,
       },
     ],
-    code: {
-      coding: (metadata.code.coding || []).map((coding) => ({
-        system: coding.system || 'http://loinc.org',
-        code: coding.code || '',
-        display: coding.display || '',
-      })),
-    },
-    subject: {
-      type: 'Patient',
-      reference: `Patient/${patient.id}`,
-    },
+    code: metadata.code,
+    subject: metadata.subject,
     effectiveDateTime: metadata.effectiveDateTime,
     issued: metadata.issued,
-    result: observations,
     conclusion: metadata.interpretation?.[0].coding?.[0].display,
-  } as DiagnosticReport;
-
-  const isProd = event.secrets['VITAL_IS_PROD']?.valueBoolean;
-
-  if (isProd) {
-    const binary = await updatePDFResult(medplum, event.secrets, orderID);
-
-    // Create a Media, representing an attachment
-    const media = await medplum.createResource({
-      resourceType: 'Media',
-      status: 'completed',
-      content: {
-        contentType: 'application/pdf',
-        url: 'Binary/' + binary.id,
-        title: 'report.pdf',
-      },
-    } as Media);
-
-    diagnosticReport.media = [
+    conclusionCode: [
       {
-        comment: 'PDF Result',
-        link: {
-          reference: `Media/${media.id}`,
-          type: 'Media',
-        },
+        coding: metadata.interpretation?.[0].coding,
       },
-    ];
-  }
+    ],
+    result: observations,
+  };
 
-  await medplum.createResource(diagnosticReport);
-
-  return true;
+  return medplum.createResource(diagnosticReport);
 }
 
 /**
