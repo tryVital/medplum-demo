@@ -5,25 +5,10 @@ import {
   indexStructureDefinitionBundle,
 } from '@medplum/core';
 import { readJson, SEARCH_PARAMETER_BUNDLE_FILES } from '@medplum/definitions';
-import {
-  Bundle,
-  BundleEntry,
-  Coverage,
-  Observation,
-  Organization,
-  Patient,
-  Practitioner,
-  ProjectSetting,
-  Questionnaire,
-  QuestionnaireItem,
-  QuestionnaireResponse,
-  SearchParameter,
-  ServiceRequest,
-} from '@medplum/fhirtypes';
+import { Bundle, BundleEntry, Observation, Patient, ProjectSetting, SearchParameter } from '@medplum/fhirtypes';
 import { MockClient } from '@medplum/mock';
-import { QuestionnaireItemType } from '@medplum/react';
 import { MockedFunction, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createDiagnoticReport, fetchFhirResults, handler } from './order-result';
+import { createDiagnoticReport, fetchFhirResults } from './order-result';
 
 global.fetch = vi.fn();
 
@@ -172,7 +157,6 @@ function buildAPIBundleResponse(patient: Patient): Bundle {
   };
 }
 
-// TODO: Make sure it matches the actual structure of the Observation
 function buildObservation(patient: Patient): Observation {
   return {
     resourceType: 'Observation',
