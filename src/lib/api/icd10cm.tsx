@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { http } from '.';
 
 export function useICD10CM({ search }: { search: string }) {
   const { data, ...query } = useQuery({
@@ -16,11 +15,16 @@ export function useICD10CM({ search }: { search: string }) {
 }
 
 async function fetchICD10CM(search: string): Promise<ICDResponse> {
-  const resp = await http.get<ICDResponse>(`/api/icd10cm/v3/search?sf=code,name&terms=${search}`, {
-    baseURL: 'https://clinicaltables.nlm.nih.gov',
+  const url = `https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search?sf=code,name&terms=${search}`;
+
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
   });
 
-  return resp.data;
+  return resp.json() as Promise<ICDResponse>;
 }
 
 export type ICDResponse = [number, any[], null, [string, string][]];

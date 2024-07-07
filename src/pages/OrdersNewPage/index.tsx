@@ -14,23 +14,14 @@ import {
   Title,
 } from '@mantine/core';
 import { Coverage, Patient, Practitioner, QuestionnaireResponse } from '@medplum/fhirtypes';
-import {
-  CodeInput,
-  Document,
-  Loading,
-  OperationOutcomeAlert,
-  QuestionnaireForm,
-  ResourceInput,
-  useMedplum,
-} from '@medplum/react';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { Lab, useFetchLabs } from '../../lib/api/labs';
-import { LabTest, useFetchLabTests } from '../../lib/api/labtests';
-import { useFetchMarkers, useFetchQuestionnaireItems } from '../../lib/api/markers';
-import { UUID } from 'uuidjs';
-import { useFetchUsers } from '../../lib/api/users';
+import { Document, Loading, OperationOutcomeAlert, QuestionnaireForm, ResourceInput, useMedplum } from '@medplum/react';
+import { Suspense, useCallback, useMemo, useState } from 'react';
+import { useFetchLabs } from '../../lib/api/labs';
+import { useFetchLabTests } from '../../lib/api/labtests';
+import { useFetchMarkers, useFetchAoEQuestionnaire } from '../../lib/api/markers';
 import { useNavigate } from 'react-router-dom';
 import { useICD10CM } from '../../lib/api/icd10cm';
+import { Lab, LabTest } from '../../lib/api/types';
 
 export function OrdersNewPage(): JSX.Element {
   return (
@@ -57,7 +48,6 @@ type FormData = {
     assessmentPlan?: string;
     responsibleRelationship?: 'self' | 'spouse' | 'other';
     diagnosisCodes?: string[];
-    // TODO: Use coverage police holder for responsible party (either Patient or RelatedPerson)
   };
 };
 
@@ -95,7 +85,6 @@ function Demo() {
 
   const handleSubmit = async () => {
     if (!formData.patient || !formData.labTest || !formData.questionnaire || !formData.physician || !formData.lab) {
-      // TODO: Show warning
       return;
     }
 
@@ -136,7 +125,7 @@ function Demo() {
           },
         ],
       },
-    } as Coverage); // TODO: Coverage is not the ideal resource for this (InsurancePlan maybe?)
+    } as Coverage);
 
     await medplum.createResource({
       resourceType: 'ServiceRequest',
@@ -298,9 +287,6 @@ function PatientStep({ nextStep, prevStep, formData, setPatient, setCoverage }: 
             onChange={(e) => setCoverage({ ...formData.coverage, assessmentPlan: e.currentTarget.value })}
           />
         </Group>
-        {/*
-         * TODO: Add responsible party fields (used them to create a "Person" resource)
-         * */}
       </Stack>
 
       <Control nextStep={nextStep} prevStep={prevStep} />
@@ -480,24 +466,8 @@ function QuestionnaireList({
   labTestID: string;
   setQuestionnaire: TestStepProps['setQuestionnaire'];
 }) {
-  const { markers, isLoading } = useFetchQuestionnaireItems({ labID: labTestID });
-
-  if (isLoading || markers.length === 0) {
-    return null;
-  }
-
-  return (
-    <QuestionnaireForm
-      questionnaire={{
-        resourceType: 'Questionnaire',
-        id: UUID.genV4().toString(),
-        title: 'Ask on Order Entry (AOE)',
-        item: markers,
-      }}
-      submitButtonText="Preview"
-      onSubmit={setQuestionnaire}
-    />
-  );
+  const { questionnaire } = useFetchAoEQuestionnaire({ labTestID });
+  return <QuestionnaireForm questionnaire={questionnaire} submitButtonText="Preview" onSubmit={setQuestionnaire} />;
 }
 
 function MarkersList({ labTestID }: { labTestID: string }) {
@@ -517,15 +487,7 @@ function Control({ nextStep, prevStep }: { nextStep: () => void; prevStep: () =>
   );
 }
 
-function ConfirmStep({ handleSubmit, setUserID }: { handleSubmit: () => void; setUserID: (userID: string) => void }) {
-  const { users } = useFetchUsers();
-
-  useEffect(() => {
-    if (!users) return;
-
-    setUserID(users[0].user_id);
-  }, [users]);
-
+function ConfirmStep({ handleSubmit }: { handleSubmit: () => void; setUserID: (userID: string) => void }) {
   return (
     <>
       <Center>
