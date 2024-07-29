@@ -22,6 +22,7 @@ import { useFetchMarkers, useFetchAoEQuestionnaire } from '../../lib/api/markers
 import { useNavigate } from 'react-router-dom';
 import { useICD10CM } from '../../lib/api/icd10cm';
 import { Lab, LabTest } from '../../lib/api/types';
+import { createReference } from '@medplum/core';
 
 export function OrdersNewPage(): JSX.Element {
   return (
@@ -84,25 +85,50 @@ function Demo() {
   const setUserID = useCallback((userID: string) => setFormData((prev) => ({ ...prev, userID })), []);
 
   const handleSubmit = async () => {
-    if (!formData.patient || !formData.labTest || !formData.questionnaire || !formData.physician || !formData.lab) {
+    if (!formData.patient || !formData.labTest || !formData.physician || !formData.lab) {
       return;
     }
 
-    const { id: questionarieID } = await medplum.createResource(formData.questionnaire);
+    const questionarieResponse = formData.questionnaire && {
+      ...(formData.questionnaire || {}),
+      item: formData.questionnaire?.item?.filter(
+        // Filters duplicated unfilled item responses (is this a medplum bug?)
+        (item) => (item.item?.filter((item) => item.item === undefined)?.length || 0) > 0
+      ),
+    };
 
-    const { id: coverageID } = await medplum.createResource({
+    const questionarie = questionarieResponse && (await medplum.createResource(questionarieResponse));
+    const performer = await medplum.createResourceIfNoneExist(
+      {
+        resourceType: 'Organization',
+        identifier: [
+          {
+            system: 'https://docs.tryvital.io/api-reference/lab-testing/tests',
+            value: formData.labTest.id,
+          },
+        ],
+        type: [
+          {
+            coding: [
+              {
+                system: 'http://terminology.hl7.org/CodeSystem/organization-type',
+                code: 'prov',
+              },
+            ],
+          },
+        ],
+        name: formData.labTest?.name,
+      },
+      `identifier=${formData.labTest.id}`
+    );
+
+    const coverage = await medplum.createResource({
       resourceType: 'Coverage',
       network: formData.coverage.payorCode,
       subscriberId: formData.coverage.insuranceId,
       status: 'active',
-      beneficiary: {
-        reference: `Patient/${formData.patient.id}`,
-      },
+      beneficiary: createReference(formData.patient),
       extension: [
-        ...(formData.coverage.diagnosisCodes || []).map((code) => ({
-          url: 'diagnosis_code',
-          valueString: code,
-        })),
         {
           url: 'subjective',
           valueString: formData.coverage.subjective,
@@ -112,11 +138,7 @@ function Demo() {
           valueString: formData.coverage.assessmentPlan,
         },
       ],
-      payor: [
-        {
-          reference: `Patient/${formData.patient.id}`,
-        },
-      ],
+      payor: [createReference(formData.patient)],
       relationship: {
         coding: [
           {
@@ -129,37 +151,30 @@ function Demo() {
 
     await medplum.createResource({
       resourceType: 'ServiceRequest',
-      intent: 'order',
+      subject: createReference(formData.patient),
+      requester: createReference(formData.physician),
+      performer: [createReference(performer)],
+      insurance: [createReference(coverage)],
       status: 'active',
-      subject: {
-        reference: `Patient/${formData.patient.id}`,
-        type: 'Patient',
+      intent: 'order',
+      priority: formData.priority,
+      code: {
+        coding: (formData.coverage.diagnosisCodes || []).map((code) => ({
+          system: 'http://hl7.org/fhir/sid/icd-10-cm',
+          code,
+        })),
       },
-      requester: {
-        reference: `Practitioner/${formData.physician.id}`,
-        type: 'Practitioner',
-      },
+      supportingInfo: questionarie ? [createReference(questionarie)] : [],
+      note: [
+        {
+          text: formData.coverage.subjective || '',
+        },
+      ],
+      // NOTE: This won't be in the out-of-the-box Medplum UI
       extension: [
         {
-          url: 'lab_test_id',
-          valueString: formData.labTest.id,
-        },
-        {
-          url: 'user_id',
-          valueString: formData.userID,
-        },
-      ],
-      insurance: [
-        {
-          reference: `Coverage/${coverageID}`,
-          type: 'Coverage',
-        },
-      ],
-      priority: formData.priority,
-      supportingInfo: [
-        {
-          reference: `QuestionnaireResponse/${questionarieID}`,
-          type: 'QuestionnaireResponse',
+          url: 'assessment_plan',
+          valueString: formData.coverage.assessmentPlan || '',
         },
       ],
     });
@@ -239,14 +254,12 @@ function PatientStep({ nextStep, prevStep, formData, setPatient, setCoverage }: 
           <TextInput
             label="Payor Code"
             description="Unique identifier representing a specific Health Insurance."
-            required
             value={formData.coverage.payorCode}
             onChange={(e) => setCoverage({ ...formData.coverage, payorCode: e.currentTarget.value })}
           />
           <TextInput
             label="Insurance ID"
             description="Insurance unique number assigned to a patient."
-            required
             value={formData.coverage.insuranceId}
             onChange={(e) => setCoverage({ ...formData.coverage, insuranceId: e.currentTarget.value })}
           />
@@ -299,9 +312,8 @@ type VendorStepProps = StepProps & {
 };
 
 function VendorStep({ nextStep, prevStep, formData, setLab }: VendorStepProps) {
-  const { labs } = useFetchLabs();
-  const { labTests } = useFetchLabTests({ labID: formData.lab?.id });
-  const hasLabTests = labTests?.length !== 0;
+  const { labs, isLoading } = useFetchLabs();
+  const hasLabs = labs?.length !== 0 || isLoading;
 
   return (
     <>
@@ -315,7 +327,7 @@ function VendorStep({ nextStep, prevStep, formData, setLab }: VendorStepProps) {
           onChange={(_, opt) => setLab(labs?.find((l) => l.id.toString() === opt.value))}
         />
 
-        {!hasLabTests && (
+        {!hasLabs && (
           <OperationOutcomeAlert
             outcome={{
               resourceType: 'OperationOutcome',
@@ -360,7 +372,10 @@ function TestStep({
   const { labTests, isLoading } = useFetchLabTests({ labID: formData.lab?.id });
   const hasLabTests = labTests?.length !== 0;
 
-  const hasAOE = useMemo(() => formData.labTest?.markers?.some((m) => m.aoe.questions.length > 0), [formData.labTest]);
+  const hasAOE = useMemo(
+    () => formData.labTest?.markers?.some((m) => m.aoe && m.aoe.questions.length > 1),
+    [formData.labTest]
+  );
 
   const [searchValue, setSearchValue] = useState('');
 
@@ -442,7 +457,7 @@ function TestStep({
 
       <Space h="lg" />
 
-      {formData.labTest && (
+      {formData.labTest && hasAOE && (
         <Suspense fallback={<Loading />}>
           <QuestionnaireList
             labTestID={formData.labTest.id}
@@ -466,7 +481,11 @@ function QuestionnaireList({
   labTestID: string;
   setQuestionnaire: TestStepProps['setQuestionnaire'];
 }) {
-  const { questionnaire } = useFetchAoEQuestionnaire({ labTestID });
+  const { questionnaire, isLoading } = useFetchAoEQuestionnaire({ labTestID });
+  if (isLoading) {
+    return <Loading />;
+  }
+
   return <QuestionnaireForm questionnaire={questionnaire} submitButtonText="Preview" onSubmit={setQuestionnaire} />;
 }
 

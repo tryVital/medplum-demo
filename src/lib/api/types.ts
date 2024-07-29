@@ -19,7 +19,7 @@ export type Marker = {
   type?: string;
   unit: any;
   price: string;
-  aoe: {
+  aoe?: {
     questions: {
       id: number;
       required: boolean;
